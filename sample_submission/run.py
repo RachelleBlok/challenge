@@ -139,7 +139,7 @@ submission_filename = 'automl_sample_submission_' + the_date
 # Use default location for the input and output data:
 # If no arguments to run.py are provided, this is where the data will be found
 # and the results written to. Change the root_dir to your local directory.
-root_dir = "/Users/rachelle/Desktop/3ejaarIE/Scriptie/Starting_kit/codalabchallenge/"
+root_dir = "/Users/rachelle/Desktop/3ejaarIE/Scriptie/Starting_kit/challenge/"
 default_input_dir = root_dir + "Datasets/cadata" # "scoring_input0/dorothea"
 default_output_dir = root_dir + "scoring_input/res"
 

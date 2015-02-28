@@ -21,7 +21,7 @@ import yaml
 from libscores import * # Library of scores we implemented
 
 # Default I/O directories:      
-root_dir = "/Users/rachelle/Desktop/3ejaarIE/Scriptie/Starting_kit/codalabchallenge/"
+root_dir = "/Users/rachelle/Desktop/3ejaarIE/Scriptie/Starting_kit/challenge/"
 default_input_dir = root_dir + "scoring_input" 
 default_output_dir = root_dir + "scoring_output"  
 
