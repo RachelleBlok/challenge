@@ -116,7 +116,7 @@ debug_mode = 1
 # The code should keep track of time spent and NOT exceed the time limit 
 # in the dataset "info" file, stored in D.info['time_budget'], see code below.
 # If debug >=1, you can decrease the maximum time (in sec) with this variable:
-max_time = 20 
+max_time = 100  
 
 # Maximum number of cycles
 ##########################
@@ -140,7 +140,7 @@ submission_filename = 'automl_sample_submission_' + the_date
 # If no arguments to run.py are provided, this is where the data will be found
 # and the results written to. Change the root_dir to your local directory.
 root_dir = "/Users/rachelle/Desktop/3ejaarIE/Scriptie/Starting_kit/challenge/"
-default_input_dir = root_dir + "Datasets/cadata" # "scoring_input0/dorothea"
+default_input_dir = root_dir + "Datasets/newsgroups" # "scoring_input0/dorothea"
 default_output_dir = root_dir + "scoring_input/res"
 
 # =========================== END USER OPTIONS ================================

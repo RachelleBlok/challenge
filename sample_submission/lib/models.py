@@ -1,10 +1,10 @@
 import numpy as np
 import scipy as sp
 from sklearn.linear_model import Ridge, RidgeClassifier, LogisticRegression, LinearRegression
-from sklearn.svm import SVR
+from sklearn.svm import SVR, SVC
 from sklearn.preprocessing import StandardScaler
 from sklearn.naive_bayes import BernoulliNB
-from sklearn.ensemble import GradientBoostingClassifier, GradientBoostingRegressor, BaggingClassifier, BaggingRegressor, RandomForestClassifier
+from sklearn.ensemble import GradientBoostingClassifier, GradientBoostingRegressor, BaggingClassifier, BaggingRegressor, RandomForestClassifier, AdaBoostRegressor, RandomForestRegressor
 from sklearn.pipeline import Pipeline
 from sklearn.feature_selection import SelectKBest
 from sklearn.feature_selection import chi2
@@ -43,7 +43,7 @@ class MyAutoML:
 	def __init__(self, info, X, Y, time_budget, time_spent, verbose=True, debug_mode=False):
 		self.start = time.time()
 		time_budget = time_budget - time_spent
-		print "TIME BUDGET test"
+		print "TIME BUDGET"
 		print time_budget
 		time_spent = 0
 	
@@ -66,13 +66,27 @@ class MyAutoML:
 			name0 = "LinearRegression"
 			name1 = "Ridge"
 			name2 = "GradientBoostingRegressor"
+			name3 = "RandomForestRegressor"
 			model0 = LinearRegression(fit_intercept = True, normalize = True, copy_X = True) 
 			model1 = Ridge(alpha=1.0, fit_intercept = True, normalize = True, copy_X = True) 
 			model2 = GradientBoostingRegressor(n_estimators=1, verbose=verbose, warm_start = True)
+			model3 = RandomForestRegressor()
 			
-			self.classifiers.update({name0:model0, name1:model1, name2:model2})
+			self.classifiers.update({name0:model0, name1:model1, name2:model2, name3:model3})
 	
 		####----------- TASK IS REGRESSION ------------####	
+		
+		####----------- TASK IS MULTICLASS ------------####	
+		
+		elif info['task'] == 'multiclass.classification':
+			print "Bagging Classifier"
+			name0 = "BaggingNBClassifier"
+			model0 = BaggingClassifier(base_estimator=BernoulliNB(), n_estimators=1, verbose=verbose)
+			
+			self.classifiers.update({name0:model0})
+			self.predict_method = model0.predict_proba 
+		
+		####----------- TASK IS MULTICLASS ------------####	
 		
 		print "CLASSIFIERS"
 		print self.classifiers
@@ -82,24 +96,27 @@ class MyAutoML:
 			self.model = self.classifiers[key]
 			print "HUIDIGE MODEL"
 			print self.model
-			
-			if self.name == "GradientBoostingRegressor":	#increase number of estimators
-				'''
-				param_grid = {'alpha': stats.uniform(),'loss':['ls', 'lad', 'huber', 'quantile']}
-				n_iter = 1
-				self.randomsearch(param_grid, n_iter, X, Y)
-				'''	
 				
-				cycle = 0
-				max_cycle = 10
+			if self.name == "GradientBoostingRegressor":	#increase number of estimators
+				cycle = 5
+				max_cycle = 6
 				time_spent = time.time() - self.start
-				while (time_spent <= time_budget/3 and cycle <= max_cycle):
+				while (time_spent <= time_budget/8 and cycle <= max_cycle):
 					self.model.n_estimators = int(np.exp2(cycle))
 					cycle += 1
-					print "cycle"
-					print cycle
 					self.fit(X, Y)
 					time_spent = time.time() - self.start
+			
+			if self.name == "RandomForestRegressor":	#increase number of estimators
+				cycle = 3
+				max_cycle = 5
+				time_spent = time.time() - self.start
+			
+				while (time_spent <= time_budget/1.6 and cycle <= max_cycle):
+					self.model.n_estimators = int(np.exp2(cycle))
+					cycle += 1
+					self.fit(X, Y)
+					time_spent = time.time() - self.start		
 				
 			elif self.name == "Ridge": #randomized grid search (cross validation)
 				param_grid = {'alpha': stats.uniform(), 'solver':['auto', 'svd', 'cholesky', 'lsqr', 'sparse_cg']}
@@ -154,16 +171,22 @@ class MyAutoML:
 		print "TIME SPENT"
 		print time_spent 
 		self.model.fit(X, Y)
-		self.predict_method = self.model.predict #predict values
+		
+		if self.task == "multiclass.classification":
+			self.predict_method = self.model.predict_proba 
+		else:
+			self.predict_method = self.model.predict #predict values
 
 
 	def fit(self, X, Y):
-		#self.model.fit(X,Y)			
-		kf = cross_validation.KFold(len(X), n_folds=10)
+		self.model.fit(X,Y)			
+		if self.task == 'multiclass.classification':
+			kf = cross_validation.KFold(len(X.toarray()), n_folds=10, indices = True)
+		else:
+			kf = cross_validation.KFold(len(X), n_folds=10)
 		
 		score = cross_val_score(self.model, X, Y, cv=kf, n_jobs=-1).mean()
 		self.scoring.update({self.name:score})
-	
 		
 		# Train a calibration model postprocessor
 		if self.task != 'regression' and self.postprocessor!=None:
