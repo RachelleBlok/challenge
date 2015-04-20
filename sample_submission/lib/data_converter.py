@@ -136,6 +136,7 @@ def tp_filter(X, Y, feat_num=1000, verbose=True):
     
 def replace_missing(X):
     # This is ugly, but
+    
     try:
         if X.getformat()=='csr':
             return X
@@ -149,3 +150,4 @@ def replace_missing(X):
             line2 = [1 if np.isnan(x) else 0 for x in line] # indicator of missingness
             XX[i] = line1 + line2
     return XX
+    

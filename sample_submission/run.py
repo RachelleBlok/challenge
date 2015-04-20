@@ -116,7 +116,7 @@ debug_mode = 1
 # The code should keep track of time spent and NOT exceed the time limit 
 # in the dataset "info" file, stored in D.info['time_budget'], see code below.
 # If debug >=1, you can decrease the maximum time (in sec) with this variable:
-max_time = 100  
+max_time = 1200  
 
 # Maximum number of cycles
 ##########################
@@ -239,7 +239,7 @@ if __name__=="__main__" and debug_mode<4:
 		
 		# ======== Creating a data object with data, informations about it
 		vprint( verbose,  "======== Reading and converting data ==========")
-		D = DataManager(basename, input_dir, replace_missing=True, filter_features=True, verbose=verbose)
+		D = DataManager(basename, input_dir, replace_missing=False, filter_features=False, verbose=verbose)
 		print D
 		
 		# ======== Keeping track of time
@@ -254,19 +254,51 @@ if __name__=="__main__" and debug_mode<4:
 			vprint( verbose,  "[-] Sorry, time budget exceeded, skipping this task")
 			execution_success = False
 			continue
+	
+		#create subsample 
+		if D.info['train_num'] > 10000:
+			hulpje = D.balanced_subsample(0.1)	#create subsample of training data 
+			vprint( verbose,  "10 % SUBSAMPLE")
+			Xsub = hulpje[0]
+			Ysub = hulpje[1]
+			subsample = True
+			vprint( verbose,  "grootte subsample " + str(Xsub.shape[0]))
+		elif D.info['train_num'] < 10000 and D.info['feat_num'] > 50000: #small number of training examples
+			hulpje = D.balanced_subsample(0.5)	#create subsample of training data 
+			vprint( verbose,  "50 % SUBSAMPLE")
+			Xsub = hulpje[0]
+			Ysub = hulpje[1]
+			subsample = True
+			vprint( verbose,  "grootte subsample " + str(Xsub.shape[0]))
+		else:
+			vprint( verbose,  "GEEN SUBSAMPLE")
+			Xsub = D.data['X_train']
+			Ysub = D.data['Y_train']
+			subsample = False
+			vprint( verbose,  "grootte trainingset " + str(Xsub.shape[0]))
+			
+		Xtrain = D.data['X_train']
+		Ytrain = D.data['Y_train']
+		Xtest = D.data['X_test']
+		Xvalid = D.data['X_valid']
 		
 		# ========= Creating a model, knowing its assigned task from D.info['task'].
 		# The model can also select its hyper-parameters based on other elements of info.  
 		vprint( verbose,  "======== Creating model ==========")
-		M = MyAutoML(D.info, D.data['X_train'], D.data['Y_train'], time_budget, time_spent,  verbose, debug_mode)
+		#M = MyAutoML(D.info, D.data['X_train'], D.data['Y_train'], D.data['X_test'], D.data['X_valid'],  time_budget, time_spent, subsample, Xsub, Ysub, verbose, debug_mode)
+		M = MyAutoML(D.info, Xtrain, Ytrain, Xtest, Xvalid,  time_budget, time_spent, subsample, Xsub, Ysub, verbose, debug_mode)
+
+		print "IN RUN.PY"
 		print M
-		
+
 		# ========= Iterating over learning cycles and keeping track of time
 		# Preferably use a method that iteratively improves the model and
 		# regularly saves predictions results gradually getting better
 		# until the time budget is exceeded.
 		# The example model we provide we use just votes on an increasingly 
 		# large number of "base estimators".
+		
+		#time_spent = time_spent +  (time.time() - start)				EVEN CONTROLEREN 
 		time_spent = time.time() - start
 		vprint( verbose,  "[+] Remaining time after building model %5.2f sec" % (time_budget-time_spent))		 
 		if time_spent >= time_budget:
@@ -279,9 +311,31 @@ if __name__=="__main__" and debug_mode<4:
 		#time_spent = 0					 # Initialize time spent learning
 		cycle = 0;
 		
+		M.fit(M.Xtrain, M.Ytrain)	
+		vprint( verbose,  "[+] Fitting success, time spent so far %5.2f sec" % (time.time() - start))
+		# Make predictions
+		isTrain = False
+		Y_valid = M.predict(M.Xvalid, isTrain)
+		Y_test = M.predict(M.Xtest, isTrain)
+		isTrain = True
+		Y_train = M.predict(M.Xtrain, isTrain)   
+		vprint( verbose,  "[+] Prediction success, time spent so far %5.2f sec" % (time.time() - start))
+		# Write results
+		filename_valid = basename + '_valid_' + str(cycle).zfill(3) + '.predict'
+		data_io.write(os.path.join(output_dir,filename_valid), Y_valid)
+		filename_test = basename + '_test_' + str(cycle).zfill(3) + '.predict'
+		data_io.write(os.path.join(output_dir,filename_test), Y_test)
+		filename_train = basename + '_train_' + str(cycle).zfill(3) + '.predict'
+		data_io.write(os.path.join(output_dir,filename_train), Y_train)
+		vprint( verbose,  "[+] Results saved, time spent so far %5.2f sec" % (time.time() - start))
+		time_spent = time.time() - start
+		vprint( verbose,  "[+] End cycle, remaining time %5.2f sec" % (time_budget-time_spent))
+		cycle += 1
+		
 		'''while time_spent <= time_budget/2:'''
 		# Fit base estimators
-		#M.fit(D.data['X_train'], D.data['Y_train'])	
+		'''
+		M.fit(D.data['X_train'], D.data['Y_train'])	
 		vprint( verbose,  "[+] Fitting success, time spent so far %5.2f sec" % (time.time() - start))
 		# Make predictions
 		Y_valid = M.predict(D.data['X_valid'])
@@ -299,6 +353,7 @@ if __name__=="__main__" and debug_mode<4:
 		time_spent = time.time() - start
 		vprint( verbose,  "[+] End cycle, remaining time %5.2f sec" % (time_budget-time_spent))
 		cycle += 1
+		'''
 			
 	if zipme:
 		vprint( verbose,  "========= Zipping this directory to prepare for submit ==============")

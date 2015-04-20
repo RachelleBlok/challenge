@@ -1,13 +1,19 @@
 import numpy as np
 import scipy as sp
-from sklearn.linear_model import Ridge, RidgeClassifier, LogisticRegression, LinearRegression
-from sklearn.svm import SVR, SVC
-from sklearn.preprocessing import StandardScaler
-from sklearn.naive_bayes import BernoulliNB
-from sklearn.ensemble import GradientBoostingClassifier, GradientBoostingRegressor, BaggingClassifier, BaggingRegressor, RandomForestClassifier, AdaBoostRegressor, RandomForestRegressor
+from data_manager import DataManager
+import data_converter
+from data_io import vprint
+from sklearn import decomposition
+from sklearn import preprocessing
+from sklearn import feature_selection
+from sklearn.neighbors import KNeighborsClassifier, KNeighborsRegressor
+from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
+from sklearn.linear_model import Ridge, RidgeClassifier, LogisticRegression, LinearRegression, SGDClassifier, SGDRegressor, Lasso, ElasticNet, BayesianRidge
+from sklearn.svm import SVR, SVC, NuSVC, LinearSVC
+from sklearn.naive_bayes import BernoulliNB, GaussianNB
+from sklearn.ensemble import GradientBoostingClassifier, GradientBoostingRegressor, BaggingClassifier, BaggingRegressor, RandomForestClassifier, AdaBoostRegressor, AdaBoostClassifier, RandomForestRegressor
+from sklearn.multiclass import OneVsRestClassifier, OneVsOneClassifier 
 from sklearn.pipeline import Pipeline
-from sklearn.feature_selection import SelectKBest
-from sklearn.feature_selection import chi2
 from sklearn import cross_validation
 from sklearn.cross_validation import cross_val_score
 from sklearn.grid_search import RandomizedSearchCV
@@ -15,6 +21,7 @@ from scipy import stats
 import operator
 import copy
 import time
+import random
 
 class MyAutoML:
 	''' Rough sketch of a class that "solves" the AutoML problem. We illustrate various type of data that will be encountered in the challenge can be handled.
@@ -40,54 +47,444 @@ class MyAutoML:
 		 '''
 		
 		 
-	def __init__(self, info, X, Y, time_budget, time_spent, verbose=True, debug_mode=False):
+	def __init__(self, info, Xtrain, Ytrain, Xtest, Xvalid, time_budget, time_spent, subsample, Xsub, Ysub, verbose=True, debug_mode=False):
 		self.start = time.time()
 		time_budget = time_budget - time_spent
 		print "TIME BUDGET"
 		print time_budget
-		time_spent = 0
+		#time_spent = 0
 	
 		self.classifiers = {}	#dictionary to save all models
 		self.scoring = {}			#dictionary to save the scores of all models
 		
-		# get data from info file 	
+		self.Xsub = Xsub			#subsample x values
+		self.Ysub = Ysub			#subsample y values
+		
+		# get data from info file 
+		self.dataset = info['name']
+		self.score = info['metric'][0:-7] #voor de scoring parameter in cv goed te zetten
+		self.has_categorical = info['has_categorical']
+		self.has_missing = info['has_missing'] 	
+		self.sparse = info['is_sparse']
 		self.train_num = info['train_num']
 		self.feat_num = info['feat_num']
 		self.label_num=info['label_num']
 		self.target_num=info['target_num']
+		self.feat_type = info['feat_type']
 		self.task = info['task']
 		self.metric = info['metric']
 		self.postprocessor = None
 		#self.postprocessor = MultiLabelEnsemble(LogisticRegression(), balance=True) # To calibrate proba
 		self.postprocessor = MultiLabelEnsemble(LogisticRegression(), balance=False) # To calibrate proba
-	   
-		####----------- TASK IS REGRESSION ------------####
-		if info['task']=='regression':
-			name0 = "LinearRegression"
-			name1 = "Ridge"
-			name2 = "GradientBoostingRegressor"
-			name3 = "RandomForestRegressor"
-			model0 = LinearRegression(fit_intercept = True, normalize = True, copy_X = True) 
-			model1 = Ridge(alpha=1.0, fit_intercept = True, normalize = True, copy_X = True) 
-			model2 = GradientBoostingRegressor(n_estimators=1, verbose=verbose, warm_start = True)
-			model3 = RandomForestRegressor()
-			
-			self.classifiers.update({name0:model0, name1:model1, name2:model2, name3:model3})
+		
+		if (subsample == True):
+			print "SUBSAMPLE PREPROCESSING"
+			self.preprocessing_subsample()
+		else:
+			print "GEEN SUBSAMPLE PREPROCESSING"
+		
+		self.Xtrain = Xtrain
+		self.Ytrain = Ytrain
+		self.Xtest = Xtest
+		self.Xvalid = Xvalid
+		
+		print "PREPROCESSING"
+		self.preprocessing(verbose=verbose)
 	
-		####----------- TASK IS REGRESSION ------------####	
-		
-		####----------- TASK IS MULTICLASS ------------####	
-		
+		#try models 
+		if info['task']=='regression':
+			self.regression(verbose)
 		elif info['task'] == 'multiclass.classification':
-			print "Bagging Classifier"
-			name0 = "BaggingNBClassifier"
-			model0 = BaggingClassifier(base_estimator=BernoulliNB(), n_estimators=1, verbose=verbose)
+			self.multiclass(verbose)
+		elif info['task']=='multilabel.classification':
+			self.multilabel(verbose)
+		elif info['task']=='binary.classification': 
+			self.binary(verbose)
+		
+		self.trymodels(time_budget)
+	
+		self.bestmodel()	#fit the model with highest score and predict target values	
+		
+		time_spent = time.time() - self.start
+		print "TIME SPENT"
+		print time_spent
+		
+		self.model.fit(self.Xtrain, self.Ytrain)		  
+
+	def __repr__(self):
+		return "MyAutoML : " + self.name
+
+	def __str__(self):
+		return "MyAutoML : \n" + str(self.model) 
+	
+	def regression(self, verbose = True):
+		print "Regression"
+		name0 = "LinearRegression"
+		model0 = LinearRegression(copy_X = True) 
+		
+		name1 = "Ridge"
+		model1 = Ridge(fit_intercept = True, normalize = True, copy_X = True)
+		
+		name2 = "GradientBoostingRegressor"
+		model2 = GradientBoostingRegressor(n_estimators = 30, verbose=verbose, warm_start = True)
+		
+		name3 = "RandomForestRegressor"
+		model3 = RandomForestRegressor(n_estimators = 30, verbose = verbose)
+		
+		name4 = "Lasso"
+		model4 = Lasso(warm_start = True)
+		
+		name5 = "ElasticNet"
+		model5 = ElasticNet(warm_start = True) 
+		
+		name6 = "SGDRegressor"
+		model6 = SGDRegressor(warm_start = True) 
+		
+		name7 = "BayesianRidge"
+		model7 = BayesianRidge() 
+		
+		name8 = "KNeighborsRegressor"
+		model8 = KNeighborsRegressor()
+		
+		name9 = "DecisionTreeRegressor"
+		model9 = DecisionTreeRegressor()
+		
+		name10 = "BaggingRegressor"
+		model10 = BaggingRegressor(n_estimators = 30)
+		
+		name11 = "AdaBoostRegressor"
+		model11 = AdaBoostRegressor(n_estimators = 30)
+		
+		name12 = "SVR"
+		model12 = SVR()
+		
+		self.classifiers.update({name12:model12})
+
+		for key in self.classifiers:
+			self.model = self.classifiers[key]	
+			self.predict_method = self.model.predict 
+	
+	def multiclass(self, verbose = True):
+		print "Multiclass"
+		if self.sparse == 1:
+			name0 = "SGDClassifier"
+			model0 = SGDClassifier(n_iter = np.ceil(10**6 / self.train_num), loss = 'log', verbose = verbose)
+		
+			name1  = "LogisticRegression"
+			model1 = LogisticRegression() 
 			
-			self.classifiers.update({name0:model0})
-			self.predict_method = model0.predict_proba 
+			name2 = "RandomForestClassifier"
+			model2 = RandomForestClassifier(n_estimators = 30, verbose = verbose)
+			
+			name3 = "DecisionTreeClassifier"
+			model3 = DecisionTreeClassifier()
+			
+			name4 = "BaggingClassifier"
+			model4 = BaggingClassifier(n_estimators = 30, verbose = verbose)
+			
+			name5 = "GaussianNB"
+			model5 = GaussianNB()
+			
+			name6 = "BernoulliNB"
+			model6 = BernoulliNB()  
+			
+			name7 = "KNeighborsClassifier"
+			model7 = KNeighborsClassifier()
+			
+			name8 = "GradientBoostingClassifier"
+			model8 = GradientBoostingClassifier(n_estimators = 5, verbose = verbose)
+			
+			name9 = "AdaBoostClassifier"
+			model9 = AdaBoostClassifier(n_estimators = 30)
+			
+			name10 = "SVC"
+			model10 = SVC(verbose = 2, probability = True)
+			
+			self.classifiers.update({name10:model10})
+		else:
+			name0 = "SVC"
+			model0 = SVC(verbose = 2, probability = True)
+			
+			name1 = "RandomForestClassifier"
+			model1 = RandomForestClassifier(n_estimators = 30, verbose = verbose)
+			
+			name2 = "KNeighborsClassifier"
+			model2 = KNeighborsClassifier()
+			
+			name3 = "DecisionTreeClassifier"
+			model3 = DecisionTreeClassifier()
+			
+			name4 = "BaggingClassifier"
+			model4 = BaggingClassifier(n_estimators = 30, verbose = verbose)
+			
+			name5 = "GradientBoostingClassifier"
+			model5 = GradientBoostingClassifier(n_estimators = 30, verbose = verbose)
+			
+			name6 = "SGDClassifier"
+			model6 = SGDClassifier(n_iter = np.ceil(10**6 / self.train_num), loss = 'log', verbose = verbose)
+			
+			name7 = "LogisticRegression"
+			model7 = LogisticRegression() 
+			
+			name8 = "GaussianNB"
+			model8 = GaussianNB() 
+			
+			name9 = "BernoulliNB"
+			model9 = BernoulliNB() 
+				
+			self.classifiers.update({name6:model6})
+			
+		for key in self.classifiers:
+			self.model = self.classifiers[key]
+			self.predict_method = self.model.predict_proba
+	
+	def multilabel(self, verbose = True):
+		print "MultiLabel"
 		
-		####----------- TASK IS MULTICLASS ------------####	
+		name0 = "MultiLabelRandomForest"
+		model00 = RandomForestClassifier(n_estimators=30, verbose=verbose)
+		model0 =  OneVsRestClassifier (model00)
 		
+		name1 = "MultiLabelKNeighborsClassifier"
+		model11 = KNeighborsClassifier()
+		model1 = OneVsRestClassifier (model11)
+		
+		name2 = "MultiLabelDecisionTreeClassifier"
+		model22 = DecisionTreeClassifier()
+		model2 = OneVsRestClassifier (model22)
+		
+		name3 = "MultiLabelBaggingClassifier"
+		model33 = BaggingClassifier(n_estimators = 30, verbose = verbose)
+		model3 = OneVsRestClassifier (model33)
+		
+		name4 = "MultiLabelGradientBoostingClassifier"
+		model44 = GradientBoostingClassifier(n_estimators = 30, verbose = verbose)
+		model4 = OneVsRestClassifier (model44)
+		
+		name5 = "MultiLabelSGDClassifier"
+		model55 = SGDClassifier(n_iter = np.ceil(10**6 / self.train_num), loss = 'log', verbose = verbose)
+		model5 = OneVsRestClassifier (model55)
+		
+		name6 = "MultiLabelLogisticRegression"
+		model66 = LogisticRegression() 
+		model6 = OneVsRestClassifier (model66)
+		
+		name7 = "MultiLabelGaussianNB"
+		model77 = GaussianNB() 
+		model7 = OneVsRestClassifier (model77)
+		
+		name8 = "MultiLabelBernoulliNB"
+		model88 = BernoulliNB() 
+		model8 = OneVsRestClassifier (model88)
+		
+		name9 = "MultiLabelSVC"
+		model99 = SVC(verbose = 2, probability = True)
+		model9 = OneVsRestClassifier (model99)
+			
+		self.classifiers.update({name9:model9})
+		
+		for key in self.classifiers:
+			self.model = self.classifiers[key]
+			self.predict_method = self.model.predict_proba
+	
+	def binary(self, verbose = True):
+		print "Binary"
+		name0 = "LogisticRegression"
+		model0 = LogisticRegression() 
+		
+		name1 = "SVC" 
+		model1 = SVC(probability = True, verbose = verbose)
+		
+		name2 = "SGDClassifier"
+		model2 = SGDClassifier(n_iter = np.ceil(10**6 / self.train_num), loss = 'log', verbose = verbose)
+			
+		name3 = "RandomForestClassifier"
+		model3 = RandomForestClassifier(n_estimators = 30, verbose = verbose)
+			
+		name4 = "KNeighborsClassifier"
+		model4 = KNeighborsClassifier()
+			
+		name5 = "BaggingClassifier"
+		model5 = BaggingClassifier(n_estimators = 30, verbose = verbose)
+		
+		name6 = "GradientBoostingClassifier"
+		model6 = GradientBoostingClassifier(n_estimators = 30, verbose = verbose)
+		
+		name7 = "DecisionTreeClassifier"
+		model7 = DecisionTreeClassifier()
+		
+		name8 = "BernoulliNB"
+		model8 = BernoulliNB() 
+			
+		self.classifiers.update({name3:model3})
+				
+		for key in self.classifiers:
+			self.name = key
+			self.model = self.classifiers[key]	
+			
+		self.predict_method = self.model.predict_proba		
+	
+	def preprocessing_subsample(self, verbose=True):
+		vprint (verbose, "preprocessing subsample ")		
+		if self.has_missing== 1:
+			vprint (verbose, "Missing ")
+			self.Xsub = np.nan_to_num(self.Xsub)
+		if self.has_categorical == 1:
+			vprint (verbose, "OHE ")
+			cat_features = np.where(self.feat_type == 'Categorical')[0]
+			ohe = preprocessing.OneHotEncoder(categorical_features = cat_features)
+			ohe.fit(self.Xsub)
+			self.Xsub = ohe.transform(self.Xsub)
+		if self.feat_type == 'Numerical' or self.feat_type == 'Binary' or self.feat_type == 'Mixed':
+			vprint (verbose, "Normalize ")
+			preprocessing.normalize(self.Xsub)
+		if self.sparse == 1 and self.feat_num >= 1400 and self.task == 'binary.classification': #only works for binary classification and sparse data
+			vprint (verbose, "feature selection")
+			idx=[]
+			fn = min(self.Xsub.shape[1], 1000)       
+			idx = data_converter.tp_filter(self.Xsub, self.Ysub, feat_num=fn, verbose=verbose)
+			self.Xsub = self.Xsub[:,idx]
+			self.feat_idx = np.array(idx).ravel()
+		if self.sparse == 0 and (self.feat_type == 'Numerical' or self.feat_type == 'Mixed') :
+			vprint (verbose, "Min Max Scaler ")
+			mms = preprocessing.MinMaxScaler()
+			mms.fit(self.Xsub)
+			self.Xsub = mms.transform(self.Xsub)
+		if self.sparse == 1 and (self.feat_type == 'Numerical' or self.feat_type == 'Binary' ):
+			vprint (verbose, "Standard Scaler ")
+			ss = preprocessing.StandardScaler(with_mean = False, copy = False)
+			ss.fit(self.Xsub)
+			self.Xsub = ss.transform(self.Xsub)
+		if self.sparse == 0 and self.feat_num >= 1400 and self.feat_type == 'Numerical': #only works for dense data
+			vprint (verbose, "PCA ")
+			pca = decomposition.PCA(n_components = int(self.feat_num*0.04), whiten = False)
+			pca.fit(self.Xsub)
+			self.Xsub = pca.transform(self.Xsub)
+		if self.sparse == 1 and self.feat_num >= 1400 and self.task != 'binary.classification' and self.task != 'regression':  #chi2 does not work for regression
+			vprint (verbose, "Select K best ")
+			print self.Xsub.shape[1]
+			selector = feature_selection.SelectKBest(feature_selection.chi2, k = 1000)
+			selector.fit(self.Xsub, self.Ysub)
+			self.Xsub = selector.transform(self.Xsub)
+			print self.Xsub.shape[1]
+	
+			
+	def preprocessing(self, verbose=True): 
+		vprint (verbose, "preprocessing ")		
+		if self.has_missing== 1:
+			vprint (verbose, "Missing ")
+			self.Xtrain = np.nan_to_num(self.Xtrain)
+			self.Xtest = np.nan_to_num(self.Xtest)
+			self.Xvalid = np.nan_to_num(self.Xvalid)
+		if self.has_categorical == 1:
+			vprint (verbose, "OHE ")
+			cat_features = np.where(self.feat_type == 'Categorical')[0]
+			ohe = preprocessing.OneHotEncoder(categorical_features = cat_features)
+			ohe.fit(self.Xtrain)
+			self.Xtrain = ohe.transform(self.Xtrain)
+			self.Xtest = ohe.transform(self.Xtest)
+			self.Xvalid = ohe.transform(self.Xvalid)
+		if self.feat_type == 'Numerical' or self.feat_type == 'Binary' or self.feat_type == 'Mixed':
+			vprint (verbose, "Normalize ")
+			preprocessing.normalize(self.Xtrain)
+			preprocessing.normalize(self.Xtest)
+			preprocessing.normalize(self.Xvalid)
+		if self.sparse == 1 and self.feat_num >= 1400 and self.task == 'binary.classification': #only works for binary classification and sparse data
+			vprint (verbose, "feature selection")
+			idx=[]
+			fn = min(self.Xtrain.shape[1], 1000)       
+			idx = data_converter.tp_filter(self.Xtrain, self.Ytrain, feat_num=fn, verbose=verbose)
+			self.Xtrain = self.Xtrain[:,idx]
+			self.Xvalid = self.Xvalid[:,idx]
+			self.Xtest = self.Xtest[:,idx]  
+			self.feat_idx = np.array(idx).ravel()
+		if self.sparse == 0:
+			vprint (verbose, "Min Max Scaler ")
+			mms = preprocessing.MinMaxScaler()
+			mms.fit(self.Xtrain)
+			self.Xtrain = mms.transform(self.Xtrain)
+			self.Xtest = mms.transform(self.Xtest)
+			self.Xvalid = mms.transform(self.Xvalid)
+		if self.sparse == 1:
+			vprint (verbose, "Standard Scaler ")
+			ss = preprocessing.StandardScaler(with_mean = False, copy = False)
+			ss.fit(self.Xtrain)
+			self.Xtrain = ss.transform(self.Xtrain)
+			self.Xtest = ss.transform(self.Xtest)
+			self.Xvalid = ss.transform(self.Xvalid)		
+		if self.sparse == 0 and self.feat_num >= 1400: #only works for dense data
+			vprint (verbose, "PCA ")
+			pca = decomposition.PCA(n_components = int(self.feat_num*0.04), whiten = False)
+			pca.fit(self.Xtrain)
+			self.Xtrain = pca.transform(self.Xtrain)
+			self.Xtest = pca.transform(self.Xtest)
+			self.Xvalid = pca.transform(self.Xvalid)
+		if self.sparse == 1 and self.feat_num >= 1400 and self.task != 'binary.classification' and self.task != 'regression': #chi2 does not work for regression
+			vprint (verbose, "Select K best ")
+			print self.Xtrain.shape[1]
+			selector = feature_selection.SelectKBest(feature_selection.chi2, k = 1000)
+			selector.fit(self.Xtrain, self.Ytrain)
+			self.Xtrain = selector.transform(self.Xtrain)
+			print self.Xtrain.shape[1]
+			self.Xtest = selector.transform(self.Xtest)
+			self.Xvalid = selector.transform(self.Xvalid)
+	
+
+	def randomsearch(self, parameters, number_iterations):
+		if self.task == "multilabel.classification":
+			rsearch = RandomizedSearchCV(estimator = self.model, param_distributions = parameters, n_iter = number_iterations, scoring="f1", cv=10)
+		else:
+			rsearch = RandomizedSearchCV(estimator = self.model, param_distributions = parameters, n_iter = number_iterations, cv=10)
+		print "VOOR RANDOM FITTEN"
+		if self.train_num > 10000 or (self.train_num < 10000 and self.feat_num > 50000): #train on subsample of data 
+			print "RANDOM SEARCH SUBSAMPLE"
+			rsearch.fit(self.Xsub, self.Ysub)
+		else:
+			print "RANDOM SEARCH GEEN SUBSAMPLE"
+			rsearch.fit(self.Xtrain, self.Ytrain)
+		print "BESTE SCORE"
+		print(rsearch.best_score_)
+		print "BESTE PARAMETERS"
+		print(rsearch.best_estimator_)
+		self.scoring.update({self.name:rsearch.best_score_})	# update dictionary with best score  
+		self.classifiers.update({self.name:rsearch.best_estimator_})	
+		self.model.fit(self.Xtrain, self.Ytrain)
+		
+	def crossvalidation(self):	
+		if self.sparse == 1:
+			print "CV sparse"
+			if self.train_num > 10000 or (self.train_num < 10000 and self.feat_num > 50000):	#use subsample of the data
+				print "CV SUBSAMPLE"
+				kf = cross_validation.KFold(self.Xsub.shape[0], n_folds=10)	
+			else:
+				print "CV GEEN SUBSAMPLE"
+				kf = cross_validation.KFold(self.Xtrain.shape[0], n_folds=10)	
+		else:
+			print "CV normaal"
+			if self.train_num > 10000 or (self.train_num < 10000 and self.feat_num > 50000):	#use subsample of the data
+				print "CV SUBSAMPLE"
+				kf = cross_validation.KFold(len(self.Xsub), n_folds=10)
+			else:
+				print "CV GEEN SUBSAMPLE"
+				kf = cross_validation.KFold(len(self.Xtrain), n_folds=10)
+		
+		if self.task == "multilabel.classification":
+			if self.train_num > 10000 or (self.train_num < 10000 and self.feat_num > 50000):	#use subsample of the data
+				score = cross_val_score(self.model, self.Xsub, self.Ysub, cv=kf, scoring="f1", n_jobs=-1).mean()
+			else:
+				score = cross_val_score(self.model, self.Xtrain, self.Ytrain, cv=kf, scoring="f1", n_jobs=-1).mean()
+		else:
+			if self.train_num > 10000 or (self.train_num < 10000 and self.feat_num > 50000):	#use subsample of the data
+				score = cross_val_score(self.model, self.Xsub, self.Ysub, cv=kf, n_jobs=-1).mean()
+			else:
+				score = cross_val_score(self.model, self.Xtrain, self.Ytrain, cv=kf, n_jobs=-1).mean()
+		
+		print "SCORE"
+		print score
+		self.scoring.update({self.name:score})
+
+		
+	def trymodels(self, time_budget):
 		print "CLASSIFIERS"
 		print self.classifiers
 		
@@ -98,16 +495,23 @@ class MyAutoML:
 			print self.model
 				
 			if self.name == "GradientBoostingRegressor":	#increase number of estimators
+				param_grid = {'loss': ['ls', 'lad', 'huber', 'quantile'], 'learning_rate': stats.uniform(), 'max_features': ['auto', 'sqrt', 'log2'], 'min_samples_split': stats.randint(1, 11), 'min_samples_leaf':stats.randint(1, 11) }
+				n_iter = 100
+				self.randomsearch(param_grid, n_iter)	
+				'''
 				cycle = 5
 				max_cycle = 6
 				time_spent = time.time() - self.start
 				while (time_spent <= time_budget/8 and cycle <= max_cycle):
 					self.model.n_estimators = int(np.exp2(cycle))
 					cycle += 1
-					self.fit(X, Y)
+					self.crossvalidation()
 					time_spent = time.time() - self.start
-			
-			if self.name == "RandomForestRegressor":	#increase number of estimators
+				'''
+				
+				'''		
+				elif self.name == "RandomForestRegressor":	#increase number of estimators
+				
 				cycle = 3
 				max_cycle = 5
 				time_spent = time.time() - self.start
@@ -115,46 +519,159 @@ class MyAutoML:
 				while (time_spent <= time_budget/1.6 and cycle <= max_cycle):
 					self.model.n_estimators = int(np.exp2(cycle))
 					cycle += 1
-					self.fit(X, Y)
-					time_spent = time.time() - self.start		
+					self.crossvalidation()
+					time_spent = time.time() - self.start	
+				'''
 				
+				'''
+				elif self.name == "RandomForestClassifier":
+				if self.sparse == 1:
+					print "Try Models to array - sparse data"
+					self.Xtrain = self.Xtrain.toarray()
+					self.Xsub = self.Xsub.toarray()
+				param_grid = {'max_features': stats.randint(1, 11), 'min_samples_split': stats.randint(1, 11), 'min_samples_leaf':stats.randint(1, 11)  }
+				n_iter = 100
+				self.randomsearch(param_grid, n_iter)	
+				'''
+			
+			elif self.name == "RandomForestClassifier" or self.name == "BaggingClassifier" or self.name == "GradientBoostingClassifier" or self.name == "AdaBoostClassifier" or self.name == "GaussianNB":	#increase number of estimators
+				if self.sparse == 1:
+					print "Try Models to array - sparse data"
+					self.Xtrain = self.Xtrain.toarray()
+					self.Xsub = self.Xsub.toarray()
+				self.crossvalidation()
+			
 			elif self.name == "Ridge": #randomized grid search (cross validation)
 				param_grid = {'alpha': stats.uniform(), 'solver':['auto', 'svd', 'cholesky', 'lsqr', 'sparse_cg']}
 				n_iter = 100
-				self.randomsearch(param_grid, n_iter, X, Y)
-			
+				self.randomsearch(param_grid, n_iter)	
 				
 			elif self.name == "LinearRegression": #randomized grid search (cross validation)
 				param_grid = {'fit_intercept': [True, False], 'normalize':[True, False]}
 				n_iter = 4
-				self.randomsearch(param_grid, n_iter, X, Y)
+				self.randomsearch(param_grid, n_iter)
+				
+				'''
+				elif self.name == "MultiLabelLogisticRegression": #randomized grid search (cross validation)
+				param_grid = {'estimator__C': stats.expon(scale=100)}
+				n_iter = 21
+				self.randomsearch(param_grid, n_iter)
+				'''
 			
+				'''
+				elif self.name == "LogisticRegression": #randomized grid search (cross validation)
+				param_grid = {'C': stats.expon(scale=100)}
+				n_iter = 21
+				self.randomsearch(param_grid, n_iter)
+				'''
+				
+				'''
+				elif self.name == "MultiLabelKNeighborsClassifier":
+				param_grid = {'estimator__n_neighbors': stats.randint(1, 11), 'estimator__algorithm': ['auto', 'ball_tree', 'kd_tree', 'brute']}
+				n_iter = 10
+				self.randomsearch(param_grid, n_iter)
+				'''
+			
+				'''
+				elif self.name == "KNeighborsClassifier": #randomized grid search (cross validation)
+				param_grid = {'n_neighbors': stats.randint(1, 11), 'algorithm': ['auto', 'ball_tree', 'kd_tree', 'brute']}
+				n_iter = 10
+				self.randomsearch(param_grid, n_iter)
+				'''
+		
+				'''
+				elif self.name == "MultiLabelSGDClassifier":
+				param_grid = {'estimator__alpha': 10.0**-np.arange(1,7), 'estimator__l1_ratio': stats.uniform(),  'estimator__loss':[ 'log', 'modified_huber'], 'estimator__penalty':['l1', 'l2', 'elasticnet']}
+				n_iter = 10
+				self.randomsearch(param_grid, n_iter)		
+				'''
+		
+				'''
+				elif self.name == "SGDClassifier": #randomized grid search (cross validation)
+				param_grid = {'alpha': 10.0**-np.arange(1,7), 'l1_ratio': stats.uniform(),  'loss':[ 'log', 'modified_huber'], 'penalty':['l1', 'l2', 'elasticnet']}
+				n_iter = 10
+				self.randomsearch(param_grid, n_iter)
+				'''
+				
+				'''
+				elif self.name == "SVC": #randomized grid search (cross validation)
+				param_grid = {'C': stats.expon(scale=100), 'kernel': ['linear', 'poly', 'rbf'], 'gamma': stats.expon(scale=.1) }
+				n_iter = 10
+				self.randomsearch(param_grid, n_iter)
+				'''
+				
+			elif self.name == "SVR": #randomized grid search (cross validation)
+				param_grid = {'C': stats.expon(scale=100), 'kernel': ['linear', 'poly', 'rbf'], 'gamma': stats.expon(scale=.1) }
+				n_iter = 10
+				self.randomsearch(param_grid, n_iter)
+			
+				'''
+				elif self.name == "MultiLabelBernoulliNB":
+				param_grid = {'estimator__alpha': stats.uniform()}
+				n_iter = 20
+				self.randomsearch(param_grid, n_iter)
+				'''
+			
+				'''
+				elif self.name == "BernoulliNB":
+				param_grid = {'alpha': stats.uniform()}
+				n_iter = 20
+				self.randomsearch(param_grid, n_iter)
+				'''
+				
+			elif self.name == "Lasso":
+				param_grid = {'alpha': stats.uniform()}
+				n_iter = 20
+				self.randomsearch(param_grid, n_iter)
+			
+			elif self.name == "ElasticNet":
+				param_grid = {'alpha': stats.uniform()}
+				n_iter = 20
+				self.randomsearch(param_grid, n_iter)
+				
+			elif self.name == "DecisionTreeRegressor":
+				param_grid = {'max_features': ['auto', 'sqrt', 'log2'], 'min_samples_split': stats.randint(1, 11), 'min_samples_leaf':stats.randint(1, 11)}
+				n_iter = 240
+				self.randomsearch(param_grid, n_iter)
+				
+				'''
+				elif self.name == "MultiLabelGradientBoostingClassifier":
+				param_grid = {'estimator__max_features': ['auto', 'sqrt', 'log2'], 'estimator__min_samples_split': stats.randint(1, 11), 'estimator__min_samples_leaf':stats.randint(1, 11)}
+				n_iter = 20
+				self.randomsearch(param_grid, n_iter)
+				'''
+				
+				'''
+				elif self.name == "MultiLabelDecisionTreeClassifier":
+				if self.sparse == 1:
+					print "Try Models to array - sparse data"
+					self.Xtrain = self.Xtrain.toarray()
+					self.Xsub = self.Xsub.toarray()
+				param_grid = {'estimator__criterion':[ 'gini', 'entropy'], 'estimator__splitter': ['best', 'random'], 'estimator__max_features': ['auto', 'sqrt', 'log2'], 'estimator__min_samples_split': stats.randint(1, 11), 'estimator__min_samples_leaf':stats.randint(1, 11)}
+				n_iter = 240
+				self.randomsearch(param_grid, n_iter)
+				'''
+				
+				
+			elif self.name == "DecisionTreeClassifier":
+				if self.sparse == 1:
+					print "Try Models to array - sparse data"
+					self.Xtrain = self.Xtrain.toarray()
+					self.Xsub = self.Xsub.toarray()
+				'''	
+				param_grid = {'criterion':[ 'gini', 'entropy'], 'splitter': ['best', 'random'], 'max_features': ['auto', 'sqrt', 'log2'], 'min_samples_split': stats.randint(1, 11), 'min_samples_leaf':stats.randint(1, 11)}
+				n_iter = 240
+				self.randomsearch(param_grid, n_iter)
+				'''
+				self.crossvalidation()
 			else:	#k-fold cross validation	
-				self.fit(X, Y)
+				self.crossvalidation()
 		
 		print "SCORES"
-		print self.scoring
-		
-		self.bestmodel(X, Y)	#fit the model with highest score and predict target values			  
-
-	def __repr__(self):
-		return "MyAutoML : " + self.name
-
-	def __str__(self):
-		return "MyAutoML : \n" + str(self.model) 
-		
-	def randomsearch(self, parameters, number_iterations, X, Y):
-		rsearch = RandomizedSearchCV(estimator = self.model, param_distributions = parameters, n_iter = number_iterations, cv=10)
-		rsearch.fit(X, Y)
-		print "BESTE SCORE"
-		print(rsearch.best_score_)
-		print "BESTE PARAMETERS"
-		print(rsearch.best_estimator_)
-		self.scoring.update({self.name:rsearch.best_score_})	# update dictionary with best score  
-		self.classifiers.update({self.name:rsearch.best_estimator_})	
+		print self.scoring	
 			
 	
-	def bestmodel(self, X, Y):	#get the model with the highest score and fit & predict the model
+	def bestmodel(self):	#get the model with the highest score and fit & predict the model
 		maxelement = max(self.scoring.iteritems(), key=operator.itemgetter(1))[0]
 
 		for key in self.classifiers: #set the model with highest score
@@ -165,41 +682,29 @@ class MyAutoML:
 		print "BEST MODEL"
 		print self.name
 		print self.model
-		
-		print "FITTEN"
-		time_spent = time.time() - self.start
-		print "TIME SPENT"
-		print time_spent 
-		self.model.fit(X, Y)
-		
-		if self.task == "multiclass.classification":
-			self.predict_method = self.model.predict_proba 
-		else:
-			self.predict_method = self.model.predict #predict values
 
-
-	def fit(self, X, Y):
-		self.model.fit(X,Y)			
-		if self.task == 'multiclass.classification':
-			kf = cross_validation.KFold(len(X.toarray()), n_folds=10, indices = True)
-		else:
-			kf = cross_validation.KFold(len(X), n_folds=10)
-		
-		score = cross_val_score(self.model, X, Y, cv=kf, n_jobs=-1).mean()
-		self.scoring.update({self.name:score})
+	def fit(self, Xtrain, Ytrain):
+		self.model.fit(Xtrain, Ytrain)			
 		
 		# Train a calibration model postprocessor
-		if self.task != 'regression' and self.postprocessor!=None:
-			Yhat = self.predict_method(X)
+		
+		if self.task != 'regression'  and self.postprocessor!=None:
+			Yhat = self.predict_method(Xtrain)
 			if len(Yhat.shape)==1: # IG modif Feb3 2015
 				Yhat = np.reshape(Yhat,(-1,1))			 
-			self.postprocessor.fit(Yhat, Y)
+			self.postprocessor.fit(Yhat, Ytrain)
+		
 		return self
 		
-	def predict(self, X):
+	def predict(self, X, isTrain):
+		print "predict(self, X)"
+		if (self.name == "RandomForestClassifier" or self.name == "BaggingClassifier" or self.name == "GradientBoostingClassifier" or self.name == "DecisionTreeClassifier" or self.name == "AdaBoostClassifier" or self.name == "GaussianNB") and self.sparse == 1 and isTrain == False:
+			print "Predict to array - sparse data"
+			X = X.toarray()
 		prediction = self.predict_method(X)
+	
 		# Calibrate proba
-		if self.task != 'regression' and self.postprocessor!=None:			
+		if self.task != 'regression' and self.postprocessor!=None:        
 			prediction = self.postprocessor.predict_proba(prediction)
 		# Keep only 2nd column because the second one is 1-first	
 		if self.target_num==1 and len(prediction.shape)>1 and prediction.shape[1]>1:
@@ -241,12 +746,12 @@ class MultiLabelEnsemble:
 	def __str__(self):
 		return "MultiLabelEnsemble : \n" + "\tn_label={}\n".format(self.n_label) + "\tn_target={}\n".format(self.n_target) + "\tn_estimators={}\n".format(self.n_estimators) + str(self.predictors[0])
 	
-	def fit(self, X, Y):
-		if len(Y.shape)==1: 
-			Y = np.array([Y]).transpose() # Transform vector into column matrix
+	def fit(self, Xtrain, Ytrain):
+		if len(Ytrain.shape)==1: 
+			Ytrain = np.array([Ytrain]).transpose() # Transform vector into column matrix
 			# This is NOT what we want: Y = Y.reshape( -1, 1 ), because Y.shape[1] out of range
-		self.n_target = Y.shape[1]				   # Num target values = num col of Y
-		self.n_label = len(set(Y.ravel()))		   # Num labels = num classes (categories of categorical var if n_target=1 or n_target if labels are binary )
+		self.n_target = Ytrain.shape[1]				   # Num target values = num col of Y
+		self.n_label = len(set(Ytrain.ravel()))		   # Num labels = num classes (categories of categorical var if n_target=1 or n_target if labels are binary )
 		# Create the right number of copies of the predictor instance
 		if len(self.predictors)!=self.n_target:
 			predictorInstance = self.predictors[0]
@@ -260,8 +765,8 @@ class MultiLabelEnsemble:
 				self.predictors[i].n_estimators=self.n_estimators
 			# Subsample if desired
 			if self.balance:
-				pos = Y[:,i]>0
-				neg = Y[:,i]<=0
+				pos = Ytrain[:,i]>0
+				neg = Ytrain[:,i]<=0
 				if sum(pos)<sum(neg): 
 					chosen = pos
 					not_chosen = neg
@@ -274,22 +779,23 @@ class MultiLabelEnsemble:
 				np.random.shuffle(idx)
 				chosen[idx[0:min(num, len(idx))]]=True
 				# Train with chosen samples			   
-				self.predictors[i].fit(X[chosen,:],Y[chosen,i])
+				self.predictors[i].fit(Xtrain[chosen,:],Ytrain[chosen,i])
 			else:
-				self.predictors[i].fit(X,Y[:,i])
+				self.predictors[i].fit(Xtrain,Ytrain[:,i])
 		return
 		
-	def predict_proba(self, X):
-		if len(X.shape)==1: # IG modif Feb3 2015
-			X = np.reshape(X,(-1,1))   
-		prediction = self.predictors[0].predict_proba(X)
+	def predict_proba(self, Xtrain):
+		if len(Xtrain.shape)==1: # IG modif Feb3 2015
+			X = np.reshape(Xtrain,(-1,1))   
+		prediction = self.predictors[0].predict_proba(Xtrain)
 		if self.n_label==2:					# Keep only 1 prediction, 1st column = (1 - 2nd column)
 			prediction = prediction[:,1]
 		for i in range(1,self.n_target): # More than 1 target, we assume that labels are binary
-			new_prediction = self.predictors[i].predict_proba(X)[:,1]
+			new_prediction = self.predictors[i].predict_proba(Xtrain)[:,1]
 			prediction = np.column_stack((prediction, new_prediction))
 		return prediction
-		
+	
+				
 class RandomPredictor:
 	''' Make random predictions.'''
 	
@@ -303,11 +809,11 @@ class RandomPredictor:
 	def __str__(self):
 		return "RandomPredictor"
 	
-	def fit(self, X, Y):
-		if len(Y.shape)>1:
-			assert(self.target_num==Y.shape[1])
+	def fit(self, Xtrain, Ytrain):
+		if len(Ytrain.shape)>1:
+			assert(self.target_num==Ytrain.shape[1])
 		return self
 		
-	def predict_proba(self, X):
-		prediction = np.random.rand(X.shape[0],self.target_num)
+	def predict_proba(self, Xtrain):
+		prediction = np.random.rand(Xtrain.shape[0],self.target_num)
 		return prediction			

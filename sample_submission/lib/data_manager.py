@@ -16,6 +16,9 @@
 import data_converter
 import data_io
 from data_io import vprint
+from sklearn import decomposition
+from sklearn import preprocessing
+from sklearn import feature_selection
 import numpy as np
 try:
 	import cPickle as pickle
@@ -23,6 +26,7 @@ except:
 	import pickle
 import os
 import time
+import random
 
 class DataManager:
 	''' This class aims at loading and saving data easily with a cache and at generating a dictionary (self.info) in which each key is a feature (e.g. : name, format, feat_num,...).
@@ -53,7 +57,7 @@ class DataManager:
 		Get the kind of problem ('binary.classification', 'multiclass.classification', 'multilabel.classification', 'regression'), using the solution file given.
 	'''
 	
-	def __init__(self, basename, input_dir, verbose=False, replace_missing=True, filter_features=False):
+	def __init__(self, basename, input_dir, verbose=False, replace_missing=False, filter_features=False):
 		'''Constructor'''
 		self.use_pickle = False # Turn this to true to save data as pickle (inefficient)
 		self.basename = basename
@@ -70,10 +74,13 @@ class DataManager:
 				os.makedirs("tmp")
 				self.tmp_dir = "tmp"
 		info_file = os.path.join (self.input_dir, basename + '_public.info')
+		
+		
 		self.info = {}
 		self.getInfo (info_file)
          	self.feat_type = self.loadType (os.path.join(self.input_dir, basename + '_feat.type'), verbose=verbose)
 		self.data = {}  
+		
 		Xtr = self.loadData (os.path.join(self.input_dir, basename + '_train.data'), verbose=verbose, replace_missing=replace_missing)
 		Ytr = self.loadLabel (os.path.join(self.input_dir, basename + '_train.solution'), verbose=verbose)
 		Xva = self.loadData (os.path.join(self.input_dir, basename + '_valid.data'), verbose=verbose, replace_missing=replace_missing)
@@ -92,6 +99,7 @@ class DataManager:
 		self.data['Y_train'] = Ytr
 		self.data['X_valid'] = Xva
 		self.data['X_test'] = Xte
+		
           
 	def __repr__(self):
 		return "DataManager : " + self.basename
@@ -108,8 +116,44 @@ class DataManager:
 		val = val + "feat_type:\tarray" + str(self.feat_type.shape) + "\n"
 		val = val + "feat_idx:\tarray" + str(self.feat_idx.shape) + "\n"
 		return val
-				
-	def loadData (self, filename, verbose=True, replace_missing=True):
+	
+	#create a subsample of the data for training 
+	def balanced_subsample(self, subsample_size, verbose = True):
+		Xtrain_name = os.path.join(self.input_dir, self.basename + '_train.data')
+		Ytrain_name = os.path.join(self.input_dir, self.basename + '_train.solution')
+		
+		min_elems = self.info['train_num']
+		if subsample_size < 1:
+			use_elems = int(min_elems*subsample_size)
+		else:
+			use_elems = min_elems
+		
+		teller = use_elems
+		
+		xsub = open('xsub', 'w')
+		ysub = open('ysub', 'w')
+		xtotal = open(Xtrain_name, 'r')
+		ytotal = open(Ytrain_name, 'r')
+		linesxtotal = xtotal.readlines()
+		linesytotal = ytotal.readlines()
+		
+		while (teller > 0):
+			rands = random.randint(0, self.info['train_num'] - 1)
+			xsub.write(linesxtotal[rands])
+			ysub.write(linesytotal[rands])
+			teller = teller - 1
+		
+		xsub.close()
+		ysub.close()
+		xtotal.close()
+		ytotal.close()
+		
+		self.xs = self.loadData ('xsub', verbose=verbose)
+		self.ys = self.loadLabel ('ysub', verbose=verbose)
+	
+		return self.xs, self.ys
+		
+	def loadData (self, filename, verbose=True, replace_missing=False):
 		''' Get the data from a text file in one of 3 formats: matrix, sparse, binary_sparse'''
 		if verbose:  print("========= Reading " + filename)
 		start = time.time()
@@ -127,10 +171,11 @@ class DataManager:
 		data = data_func[self.info['format']](filename, self.info['feat_num'])
   
 		# INPORTANT: when we replace missing values we double the number of variables
-  
+  		
 		if self.info['format']=='dense' and replace_missing and np.any(map(np.isnan,data)):
 			vprint (verbose, "Replace missing values by 0 (slow, sorry)")
 			data = data_converter.replace_missing(data)
+		
 		if self.use_pickle:
 			with open (os.path.join (self.tmp_dir, os.path.basename(filename) + ".pickle"), "wb") as pickle_file:
 				vprint (verbose, "Saving pickle file : " + os.path.join (self.tmp_dir, os.path.basename(filename) + ".pickle"))
@@ -329,5 +374,4 @@ class DataManager:
 				else:
 					self.info['task'] = 'multiclass.classification'        
 		return self.info['task']
-		
 		
